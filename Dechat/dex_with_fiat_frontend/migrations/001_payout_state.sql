@@ -86,3 +86,61 @@ CREATE INDEX IF NOT EXISTS idx_ai_budget_reservations_scope
   ON ai_budget_reservations(tenant_id, user_id, status);
 CREATE INDEX IF NOT EXISTS idx_ai_budget_reservations_request
   ON ai_budget_reservations(request_id);
+
+-- Issue #219: Privacy-safe retention controls for model traces and
+-- evaluation fixtures. Stored traces hold only redacted prompts/completions
+-- (secrets and payout identifiers are stripped at the trace-write boundary),
+-- and every row carries an explicit expiry so retention is enforced by
+-- deletion rather than by trusting callers. Traces are scoped to a tenant and
+-- a user/session so they can be deleted on request (right-to-erasure) and
+-- swept by the retention job once `expires_at` has passed.
+
+CREATE TABLE IF NOT EXISTS ai_model_traces (
+  id VARCHAR(64) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  user_id VARCHAR(64) NOT NULL,
+  session_id VARCHAR(128),
+  request_id VARCHAR(128),
+  -- Redacted prompt/completion payloads. Never store raw secrets or payout
+  -- identifiers here; the write boundary sanitizes before insert.
+  prompt_redacted TEXT,
+  completion_redacted TEXT,
+  -- True when redaction removed at least one sensitive span, so operators can
+  -- audit that sanitization actually ran without seeing the removed data.
+  redaction_applied BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  -- Hard retention deadline. Rows past this are eligible for deletion.
+  expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  CONSTRAINT ai_model_traces_retention_check
+    CHECK (expires_at > created_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_model_traces_user
+  ON ai_model_traces(tenant_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_ai_model_traces_session
+  ON ai_model_traces(tenant_id, session_id);
+CREATE INDEX IF NOT EXISTS idx_ai_model_traces_expiry
+  ON ai_model_traces(expires_at);
+
+-- Evaluation fixtures follow the same retention contract: synthetic-only
+-- inputs, redacted payloads, and an explicit expiry so fixtures cannot linger
+-- indefinitely. `deleted_at` supports soft-deletion for audit while the
+-- retention sweep hard-deletes expired rows.
+CREATE TABLE IF NOT EXISTS ai_evaluation_fixtures (
+  id VARCHAR(64) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  name VARCHAR(128) NOT NULL,
+  input_redacted TEXT,
+  expected_redacted TEXT,
+  redaction_applied BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  deleted_at TIMESTAMP WITH TIME ZONE,
+  CONSTRAINT ai_evaluation_fixtures_retention_check
+    CHECK (expires_at > created_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_evaluation_fixtures_tenant
+  ON ai_evaluation_fixtures(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_ai_evaluation_fixtures_expiry
+  ON ai_evaluation_fixtures(expires_at);
