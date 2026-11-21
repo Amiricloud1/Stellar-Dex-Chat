@@ -98,6 +98,37 @@ Changes to this pipeline must include focused regression tests covering:
 - provider failure and retry, verifying the attempt count increments and the
   idempotency key is unchanged.
 
+## Provider capability contract: reversals and recalls
+
+Provider adapters declare the reversal and recall semantics they support so
+callers never assume a capability the provider does not have. Each adapter
+exposes a capability descriptor covering:
+
+- **Cancellation** — whether a payout can be cancelled before settlement, and
+  the states in which cancellation is permitted.
+- **Recall** — whether a settled payout can be recalled/reversed, and the
+  states in which recall is permitted.
+- **Status semantics** — the provider status values the adapter maps onto the
+  internal payout lifecycle, and which of those are terminal.
+
+### Unsupported actions
+
+When a caller requests a cancellation, recall, or status transition the
+adapter does not declare support for, the action must be routed to an explicit
+**manual-review** outcome. Never report success for an unsupported action, and
+never silently drop it. Manual-review outcomes are surfaced through the same
+API and UI conventions as other payout states so operators can act on them.
+
+### Testing expectations
+
+Changes to the capability contract must include focused regression tests
+covering:
+
+- the normal path for each declared capability (cancellation, recall, status);
+- an unsupported action routing to manual-review rather than reporting
+  success;
+- authorization and recovery edge cases for the manual-review path.
+
 ## Pull request checklist
 
 - [ ] Contract interface changes include regenerated bindings.
@@ -107,3 +138,5 @@ Changes to this pipeline must include focused regression tests covering:
 - [ ] Payout side effects go through the transactional outbox with a stable
       idempotency key; no direct provider calls from state-mutation paths.
 - [ ] Outbox changes include crash/retry regression tests.
+- [ ] Provider adapters declare their reversal/recall/status capabilities, and
+      unsupported actions route to manual-review instead of false success.

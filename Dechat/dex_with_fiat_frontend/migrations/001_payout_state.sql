@@ -41,7 +41,48 @@ CREATE TABLE IF NOT EXISTS payout_outbox (
   delivered_at TIMESTAMP WITH TIME ZONE
 );
 
+-- Provider capability contract for reversals and recalls (Issue #223).
+-- Each provider adapter declares which cancellation, recall, and status
+-- semantics it supports. Actions a provider does not support are routed to an
+-- explicit manual-review outcome instead of reporting a false success.
+CREATE TABLE IF NOT EXISTS provider_capabilities (
+  provider_id VARCHAR(64) PRIMARY KEY,
+  supports_cancel BOOLEAN NOT NULL DEFAULT FALSE,
+  supports_recall BOOLEAN NOT NULL DEFAULT FALSE,
+  supports_status BOOLEAN NOT NULL DEFAULT FALSE,
+  cancel_semantics VARCHAR(32) NOT NULL DEFAULT 'unsupported',
+  recall_semantics VARCHAR(32) NOT NULL DEFAULT 'unsupported',
+  status_semantics VARCHAR(32) NOT NULL DEFAULT 'unsupported',
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT provider_capabilities_cancel_semantics_check
+    CHECK (cancel_semantics IN ('unsupported', 'synchronous', 'asynchronous')),
+  CONSTRAINT provider_capabilities_recall_semantics_check
+    CHECK (recall_semantics IN ('unsupported', 'synchronous', 'asynchronous')),
+  CONSTRAINT provider_capabilities_status_semantics_check
+    CHECK (status_semantics IN ('unsupported', 'polling', 'webhook'))
+);
+
+-- Manual-review queue for actions a provider cannot perform. Rows are created
+-- instead of emitting a success transition so operators can resolve them.
+CREATE TABLE IF NOT EXISTS payout_manual_reviews (
+  id BIGSERIAL PRIMARY KEY,
+  payout_id VARCHAR(64) NOT NULL REFERENCES payout_intents(id) ON DELETE CASCADE,
+  action VARCHAR(32) NOT NULL,
+  provider_id VARCHAR(64) NOT NULL,
+  reason TEXT NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'open',
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  resolved_at TIMESTAMP WITH TIME ZONE,
+  CONSTRAINT payout_manual_reviews_action_check
+    CHECK (action IN ('cancel', 'recall', 'status')),
+  CONSTRAINT payout_manual_reviews_status_check
+    CHECK (status IN ('open', 'resolved', 'dismissed'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_payout_intents_status ON payout_intents(status);
 CREATE INDEX IF NOT EXISTS idx_payout_intents_created_at ON payout_intents(created_at);
 CREATE INDEX IF NOT EXISTS idx_payout_outbox_status ON payout_outbox(status);
 CREATE INDEX IF NOT EXISTS idx_payout_outbox_payout_id ON payout_outbox(payout_id);
+CREATE INDEX IF NOT EXISTS idx_payout_manual_reviews_status ON payout_manual_reviews(status);
+CREATE INDEX IF NOT EXISTS idx_payout_manual_reviews_payout_id ON payout_manual_reviews(payout_id);
