@@ -80,9 +80,61 @@ CREATE TABLE IF NOT EXISTS payout_manual_reviews (
     CHECK (status IN ('open', 'resolved', 'dismissed'))
 );
 
+-- Append-only reversal and dispute lifecycle (Issue #224).
+-- Provider reversals and disputed transfers are recorded as immutable events
+-- linked to the original payout. Each event captures the settlement evidence
+-- (provider reference, amount, currency, evidence payload) so the original
+-- settlement record is preserved even after the payout is reversed. Rows are
+-- never updated or deleted; the current lifecycle state is derived from the
+-- latest event per payout.
+CREATE TABLE IF NOT EXISTS payout_reversals (
+  id BIGSERIAL PRIMARY KEY,
+  payout_id VARCHAR(64) NOT NULL REFERENCES payout_intents(id) ON DELETE CASCADE,
+  event_type VARCHAR(32) NOT NULL,
+  provider_reference VARCHAR(128),
+  amount_minor_units BIGINT NOT NULL,
+  currency VARCHAR(8) NOT NULL,
+  reason TEXT,
+  evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  recorded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT payout_reversals_event_type_check
+    CHECK (event_type IN ('reversal_requested', 'reversal_settled', 'dispute_opened', 'dispute_resolved')),
+  CONSTRAINT payout_reversals_amount_check CHECK (amount_minor_units > 0)
+);
+
+-- A payout may only be reversed once; disputes may be opened and resolved
+-- repeatedly but a reversal event is terminal for the successful state.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_payout_reversals_single_reversal
+  ON payout_reversals(payout_id)
+  WHERE event_type IN ('reversal_requested', 'reversal_settled');
+
+-- Prevent a reversed transfer from remaining successful: once any reversal
+-- event exists for a payout, the payout status must not be 'succeeded'.
+CREATE OR REPLACE FUNCTION enforce_payout_reversal_status()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.status = 'succeeded' AND EXISTS (
+    SELECT 1 FROM payout_reversals
+    WHERE payout_id = NEW.id
+      AND event_type IN ('reversal_requested', 'reversal_settled')
+  ) THEN
+    RAISE EXCEPTION 'payout % cannot remain succeeded after a reversal', NEW.id;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_payout_intents_reversal_status ON payout_intents;
+CREATE TRIGGER trg_payout_intents_reversal_status
+  BEFORE UPDATE ON payout_intents
+  FOR EACH ROW
+  EXECUTE FUNCTION enforce_payout_reversal_status();
+
 CREATE INDEX IF NOT EXISTS idx_payout_intents_status ON payout_intents(status);
 CREATE INDEX IF NOT EXISTS idx_payout_intents_created_at ON payout_intents(created_at);
 CREATE INDEX IF NOT EXISTS idx_payout_outbox_status ON payout_outbox(status);
 CREATE INDEX IF NOT EXISTS idx_payout_outbox_payout_id ON payout_outbox(payout_id);
 CREATE INDEX IF NOT EXISTS idx_payout_manual_reviews_status ON payout_manual_reviews(status);
 CREATE INDEX IF NOT EXISTS idx_payout_manual_reviews_payout_id ON payout_manual_reviews(payout_id);
+CREATE INDEX IF NOT EXISTS idx_payout_reversals_payout_id ON payout_reversals(payout_id);
+CREATE INDEX IF NOT EXISTS idx_payout_reversals_event_type ON payout_reversals(event_type);
