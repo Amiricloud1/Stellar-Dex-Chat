@@ -16,6 +16,79 @@ function BombChild({ shouldThrow }: { shouldThrow: boolean }) {
 }
 
 /**
+ * Critical financial states exercised by visual regression tests.
+ *
+ * Each state renders deterministic, masked content so screenshots stay stable
+ * across runs. Volatile values (addresses, amounts, timestamps, IDs) are
+ * replaced with fixed placeholders via `data-visual-mask`.
+ */
+type FinancialState =
+  | 'wallet-disconnected'
+  | 'stale-quote'
+  | 'pending-payout'
+  | 'failed-payout'
+  | 'degraded-rpc';
+
+const FINANCIAL_STATES: FinancialState[] = [
+  'wallet-disconnected',
+  'stale-quote',
+  'pending-payout',
+  'failed-payout',
+  'degraded-rpc',
+];
+
+/** Fixed placeholder used for any volatile value in the harness. */
+const MASKED = '0x0000…0000';
+
+function FinancialStatePanel({ state }: { state: FinancialState }) {
+  const content: Record<FinancialState, { title: string; body: string }> = {
+    'wallet-disconnected': {
+      title: 'Wallet disconnected',
+      body: 'Connect a wallet to view balances and quotes.',
+    },
+    'stale-quote': {
+      title: 'Quote expired',
+      body: 'This quote is stale. Refresh to get an updated rate.',
+    },
+    'pending-payout': {
+      title: 'Payout pending',
+      body: 'Your payout is being processed.',
+    },
+    'failed-payout': {
+      title: 'Payout failed',
+      body: 'The payout could not be completed. Please retry.',
+    },
+    'degraded-rpc': {
+      title: 'Degraded RPC',
+      body: 'Network is degraded. Data may be delayed.',
+    },
+  };
+
+  const { title, body } = content[state];
+
+  return (
+    <section
+      data-testid={`financial-state-${state}`}
+      data-visual-state={state}
+      className="rounded border p-4 flex flex-col gap-2"
+    >
+      <h2 className="text-sm font-semibold">{title}</h2>
+      <p className="text-sm">{body}</p>
+      <dl className="text-xs grid grid-cols-2 gap-1">
+        <dt>Wallet</dt>
+        <dd data-visual-mask="address">{MASKED}</dd>
+        <dt>Amount</dt>
+        <dd data-visual-mask="amount">0.00</dd>
+        <dt>Updated</dt>
+        <dd data-visual-mask="timestamp">--:--:--</dd>
+        <dt>Reference</dt>
+        <dd data-visual-mask="id">REF-0000</dd>
+      </dl>
+    </section>
+  );
+}
+
+/**
  * Test harness page for ErrorBoundary E2E tests.
  *
  * A "Throw Error" button triggers a crash inside ErrorBoundary so tests can
@@ -30,6 +103,11 @@ function BombChild({ shouldThrow }: { shouldThrow: boolean }) {
  *   failure so keyboard users can continue without a pointer.
  * - Status updates are announced through a single live region to avoid
  *   duplicated announcements.
+ *
+ * The page also renders the critical financial states used by visual
+ * regression tests (wallet disconnected, stale quote, pending payout, failed
+ * payout, degraded RPC). Volatile values are masked so screenshots are stable
+ * across mobile and desktop viewport projects.
  */
 export default function TestErrorBoundaryPage() {
   const [shouldThrow, setShouldThrow] = useState(false);
@@ -102,6 +180,15 @@ export default function TestErrorBoundaryPage() {
         >
           <BombChild shouldThrow={shouldThrow} />
         </ErrorBoundary>
+      </div>
+
+      <div
+        data-testid="financial-states"
+        className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
+      >
+        {FINANCIAL_STATES.map((state) => (
+          <FinancialStatePanel key={state} state={state} />
+        ))}
       </div>
     </main>
   );
