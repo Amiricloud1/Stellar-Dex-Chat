@@ -237,5 +237,137 @@
         "id": 1
       }
     }
-  ]
+  ],
+  "policyReplayFixtures": {
+    "version": 1,
+    "description": "Deterministic replay fixtures for policy decisions. Each fixture captures redacted inputs, schema versions, the expected policy decision, and tool outcomes so a reported classification can be reproduced without calling a live model. All identifiers are synthetic; no credentials or real user data are present.",
+    "schemaVersions": {
+      "fixture": 1,
+      "policyInput": 1,
+      "policyDecision": 1,
+      "toolOutcome": 1
+    },
+    "fixtures": [
+      {
+        "id": "policy-allow-low-risk",
+        "description": "Normal path: low-risk deposit within limits is allowed.",
+        "input": {
+          "schemaVersion": 1,
+          "action": "deposit",
+          "amount": "1000000000",
+          "token": "CAWYXBN4PSVXD7NIYEWVFFIIIEUCC6PUN3IMG3J2WHKDB4NVIISMXBPR",
+          "actor": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+          "riskSignals": {
+            "velocity": 1,
+            "sanctionsHit": false,
+            "jurisdiction": "XX"
+          }
+        },
+        "decision": {
+          "schemaVersion": 1,
+          "classification": "allow",
+          "reasonCode": "WITHIN_LIMITS",
+          "requiresReview": false
+        },
+        "toolOutcomes": [
+          {
+            "schemaVersion": 1,
+            "tool": "limit_check",
+            "status": "ok",
+            "result": { "withinLimit": true }
+          }
+        ]
+      },
+      {
+        "id": "policy-review-high-velocity",
+        "description": "Boundary path: elevated velocity triggers manual review.",
+        "input": {
+          "schemaVersion": 1,
+          "action": "withdraw",
+          "amount": "250000000",
+          "token": "CAWYXBN4PSVXD7NIYEWVFFIIIEUCC6PUN3IMG3J2WHKDB4NVIISMXBPR",
+          "actor": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+          "riskSignals": {
+            "velocity": 12,
+            "sanctionsHit": false,
+            "jurisdiction": "XX"
+          }
+        },
+        "decision": {
+          "schemaVersion": 1,
+          "classification": "review",
+          "reasonCode": "VELOCITY_THRESHOLD",
+          "requiresReview": true
+        },
+        "toolOutcomes": [
+          {
+            "schemaVersion": 1,
+            "tool": "velocity_check",
+            "status": "ok",
+            "result": { "velocity": 12, "threshold": 10 }
+          }
+        ]
+      },
+      {
+        "id": "policy-deny-sanctions",
+        "description": "Authorization edge case: sanctions hit denies the action.",
+        "input": {
+          "schemaVersion": 1,
+          "action": "withdraw",
+          "amount": "500000000",
+          "token": "CAWYXBN4PSVXD7NIYEWVFFIIIEUCC6PUN3IMG3J2WHKDB4NVIISMXBPR",
+          "actor": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+          "riskSignals": {
+            "velocity": 1,
+            "sanctionsHit": true,
+            "jurisdiction": "XX"
+          }
+        },
+        "decision": {
+          "schemaVersion": 1,
+          "classification": "deny",
+          "reasonCode": "SANCTIONS_HIT",
+          "requiresReview": false
+        },
+        "toolOutcomes": [
+          {
+            "schemaVersion": 1,
+            "tool": "sanctions_screen",
+            "status": "ok",
+            "result": { "hit": true }
+          }
+        ]
+      },
+      {
+        "id": "policy-recovery-tool-failure",
+        "description": "Recovery edge case: a failing tool outcome forces review rather than an unsafe allow.",
+        "input": {
+          "schemaVersion": 1,
+          "action": "deposit",
+          "amount": "1000000000",
+          "token": "CAWYXBN4PSVXD7NIYEWVFFIIIEUCC6PUN3IMG3J2WHKDB4NVIISMXBPR",
+          "actor": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+          "riskSignals": {
+            "velocity": 1,
+            "sanctionsHit": false,
+            "jurisdiction": "XX"
+          }
+        },
+        "decision": {
+          "schemaVersion": 1,
+          "classification": "review",
+          "reasonCode": "TOOL_UNAVAILABLE",
+          "requiresReview": true
+        },
+        "toolOutcomes": [
+          {
+            "schemaVersion": 1,
+            "tool": "sanctions_screen",
+            "status": "error",
+            "result": { "error": "timeout" }
+          }
+        ]
+      }
+    ]
+  }
 }
