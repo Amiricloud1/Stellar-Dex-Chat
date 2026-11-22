@@ -37,107 +37,46 @@ const STATUS_LABEL: Record<FactStatus, string> = {
 };
 
 /**
- * Typed, versioned schema for AI tool-call proposals.
+ * Validated transaction intent proposal.
  *
- * Model output is validated against this strict schema before it reaches any
- * transaction code. Unknown fields and unsupported operations are rejected,
- * and a safe, sanitized explanation is preserved for user-facing
- * clarification. The schema version is explicit so future revisions can be
- * detected and rejected rather than silently misinterpreted.
+ * Produced by the intent validator (never by conversational prose). The
+ * confirmation summary is rendered exclusively from these typed fields so the
+ * model cannot smuggle a different asset, amount, recipient, or network into
+ * the wallet action.
  */
-const TOOL_CALL_SCHEMA_VERSION = 1 as const;
-
-/** Operations the client is allowed to propose. Anything else is rejected. */
-const SUPPORTED_OPERATIONS = ['swap', 'send'] as const;
-type SupportedOperation = (typeof SUPPORTED_OPERATIONS)[number];
-
-interface ToolCallProposal {
-  schemaVersion: typeof TOOL_CALL_SCHEMA_VERSION;
-  operation: SupportedOperation;
-  /** Canonical amount after deterministic parsing; never a raw utterance. */
-  amount: number;
-  /** ISO 4217 or token symbol resolved from the utterance. */
-  currency: string;
-  /** Optional destination for `send`; must be absent for `swap`. */
-  recipient?: string;
-  /** Safe, sanitized explanation for user-facing clarification. */
-  explanation: string;
+interface IntentProposal {
+  /** True only when the proposal passed server-side validation. */
+  validated: boolean;
+  asset: string;
+  amount: string;
+  recipient: string;
+  network: string;
 }
 
-type ToolCallValidation =
-  | { ok: true; proposal: ToolCallProposal }
-  | { ok: false; reason: string; explanation: string };
+/** Fields the user must explicitly acknowledge before a wallet action. */
+type IntentField = 'asset' | 'amount' | 'recipient' | 'network';
+const INTENT_FIELDS: IntentField[] = ['asset', 'amount', 'recipient', 'network'];
 
-const TOOL_CALL_FIELDS = new Set([
-  'schemaVersion',
-  'operation',
-  'amount',
-  'currency',
-  'recipient',
-  'explanation',
-]);
-
-/** Strip control characters and cap length so explanations stay safe to render. */
-function sanitizeExplanation(raw: unknown): string {
-  if (typeof raw !== 'string') return '';
-  // eslint-disable-next-line no-control-regex
-  const cleaned = raw.replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
-  return cleaned.slice(0, 280);
-}
+const INTENT_FIELD_LABEL: Record<IntentField, string> = {
+  asset: 'Asset',
+  amount: 'Amount',
+  recipient: 'Recipient',
+  network: 'Network',
+};
 
 /**
- * Validate untrusted model output against the strict, versioned tool-call
- * schema. Rejects unknown fields, unsupported operations, wrong schema
- * versions, and malformed values. Never throws; always returns a safe
- * explanation on failure.
+ * Validate a raw intent proposal. Returns null when any required field is
+ * missing/blank or the proposal was not validated upstream — in that case no
+ * confirmation summary is rendered and no wallet action may be dispatched.
  */
-function validateToolCallProposal(raw: unknown): ToolCallValidation {
-  const fallback = 'I could not safely interpret that request. Please rephrase it.';
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    return { ok: false, reason: 'not-an-object', explanation: fallback };
-  }
-  const obj = raw as Record<string, unknown>;
-  for (const key of Object.keys(obj)) {
-    if (!TOOL_CALL_FIELDS.has(key)) {
-      return { ok: false, reason: `unknown-field:${key}`, explanation: fallback };
-    }
-  }
-  if (obj.schemaVersion !== TOOL_CALL_SCHEMA_VERSION) {
-    return { ok: false, reason: 'unsupported-schema-version', explanation: fallback };
-  }
-  if (
-    typeof obj.operation !== 'string' ||
-    !(SUPPORTED_OPERATIONS as readonly string[]).includes(obj.operation)
-  ) {
-    return { ok: false, reason: 'unsupported-operation', explanation: fallback };
-  }
-  if (typeof obj.amount !== 'number' || !Number.isFinite(obj.amount) || obj.amount <= 0) {
-    return { ok: false, reason: 'invalid-amount', explanation: fallback };
-  }
-  if (typeof obj.currency !== 'string' || obj.currency.trim() === '') {
-    return { ok: false, reason: 'invalid-currency', explanation: fallback };
-  }
-  if (obj.recipient !== undefined && typeof obj.recipient !== 'string') {
-    return { ok: false, reason: 'invalid-recipient', explanation: fallback };
-  }
-  if (obj.operation === 'swap' && obj.recipient !== undefined) {
-    return { ok: false, reason: 'unexpected-recipient', explanation: fallback };
-  }
-  const explanation = sanitizeExplanation(obj.explanation);
-  if (explanation === '') {
-    return { ok: false, reason: 'missing-explanation', explanation: fallback };
-  }
-  return {
-    ok: true,
-    proposal: {
-      schemaVersion: TOOL_CALL_SCHEMA_VERSION,
-      operation: obj.operation as SupportedOperation,
-      amount: obj.amount,
-      currency: obj.currency,
-      recipient: obj.recipient as string | undefined,
-      explanation,
-    },
-  };
+function validateIntentProposal(raw: Partial<IntentProposal> | null | undefined): IntentProposal | null {
+  if (!raw || raw.validated !== true) return null;
+  const asset = typeof raw.asset === 'string' ? raw.asset.trim() : '';
+  const amount = typeof raw.amount === 'string' ? raw.amount.trim() : '';
+  const recipient = typeof raw.recipient === 'string' ? raw.recipient.trim() : '';
+  const network = typeof raw.network === 'string' ? raw.network.trim() : '';
+  if (!asset || !amount || !recipient || !network) return null;
+  return { validated: true, asset, amount, recipient, network };
 }
 
 /**
@@ -348,4 +287,82 @@ function replayTrace(
     }
   }
   return divergences;
+}
+
+/**
+ * Explicit transaction intent confirmation for AI handoff.
+ *
+ * Renders a typed summary sourced from the validated intent proposal and
+ * requires the user to acknowledge asset, amount, recipient, and network
+ * before any wallet action is dispatched. If the proposal is missing or
+ * unvalidated, no summary is shown and the action stays disabled.
+ */
+function IntentConfirmation({
+  proposal,
+  onConfirm,
+}: {
+  proposal: IntentProposal | null;
+  onConfirm: (proposal: IntentProposal) => void;
+}) {
+  const [acknowledged, setAcknowledged] = useState<Record<IntentField, boolean>>({
+    asset: false,
+    amount: false,
+    recipient: false,
+    network: false,
+  });
+
+  // Reset acknowledgements whenever the proposal identity changes so a stale
+  // acknowledgement can never authorize a different intent.
+  const proposalKey = proposal
+    ? `${proposal.asset}|${proposal.amount}|${proposal.recipient}|${proposal.network}`
+    : '';
+  useEffect(() => {
+    setAcknowledged({ asset: false, amount: false, recipient: false, network: false });
+  }, [proposalKey]);
+
+  if (!proposal) {
+    return (
+      <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+        No validated transaction intent is available. Confirm the asset, amount,
+        recipient, and network before any wallet action.
+      </div>
+    );
+  }
+
+  const allAcknowledged = INTENT_FIELDS.every((f) => acknowledged[f]);
+
+  return (
+    <div className="rounded border border-gray-300 p-3 text-sm">
+      <h3 className="mb-2 font-semibold">Confirm transaction intent</h3>
+      <ul className="mb-3 space-y-1">
+        {INTENT_FIELDS.map((field) => (
+          <li key={field} className="flex items-center gap-2">
+            <input
+              id={`intent-ack-${field}`}
+              type="checkbox"
+              checked={acknowledged[field]}
+              onChange={(e) =>
+                setAcknowledged((prev) => ({ ...prev, [field]: e.target.checked }))
+              }
+            />
+            <label htmlFor={`intent-ack-${field}`}>
+              <span className="font-medium">{INTENT_FIELD_LABEL[field]}:</span>{' '}
+              <span className="font-mono">{proposal[field]}</span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      <button
+        type="button"
+        disabled={!allAcknowledged}
+        onClick={() => {
+          if (!allAcknowledged) return;
+          onConfirm(proposal);
+        }}
+        className="rounded bg-blue-600 px-3 py-1 text-white disabled:opacity-50"
+      >
+        Confirm and continue
+      </button>
+    </div>
+  );
 }
