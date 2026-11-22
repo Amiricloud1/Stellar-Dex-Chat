@@ -227,13 +227,152 @@ interface ReplayDivergence {
 
 const SENSITIVE_KEY = /(secret|token|key|password|seed|private|auth|signature)/i;
 
+/**
+ * Payout identifiers (bank account, IBAN, wallet address, payout reference)
+ * must never enter a stored trace. Matched by key name and by value shape.
+ */
+const PAYOUT_KEY = /(payout|iban|account|routing|wallet|address|beneficiary|bank)/i;
+const PAYOUT_VALUE = /(\b0x[0-9a-fA-F]{6,}\b|\b[A-Z]{2}\d{2}[A-Z0-9]{10,}\b)/;
+
 /** Redact sensitive argument values before they enter a trace. */
 function redactArgs(args: Record<string, unknown>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(args)) {
-    out[k] = SENSITIVE_KEY.test(k) ? '[REDACTED]' : String(v);
+    const s = String(v);
+    out[k] =
+      SENSITIVE_KEY.test(k) || PAYOUT_KEY.test(k) || PAYOUT_VALUE.test(s)
+        ? '[REDACTED]'
+        : s;
   }
   return out;
+}
+
+/**
+ * Retention policy for stored model traces and evaluation fixtures.
+ *
+ * Traces (prompts/completions) are kept for a short debugging window;
+ * evaluation fixtures are kept longer because they are synthetic and pinned.
+ * Expired entries are purged on read and on write so retention is enforced
+ * without a background job.
+ */
+const TRACE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const FIXTURE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+
+interface RetainedTrace {
+  /** Owning user id (opaque, never an email or wallet address). */
+  userId: string;
+  /** Session id the trace was recorded under. */
+  sessionId: string;
+  recordedAt: number;
+  trace: ConversationTrace;
+}
+
+interface RetainedFixture {
+  fixture: string;
+  recordedAt: number;
+  trace: ConversationTrace;
+}
+
+/** In-memory retention store; nothing is persisted client-side. */
+const traceStore = new Map<string, RetainedTrace>();
+const fixtureStore = new Map<string, RetainedFixture>();
+
+function traceKey(userId: string, sessionId: string, recordedAt: number): string {
+  return `${userId}\u0000${sessionId}\u0000${recordedAt}`;
+}
+
+/** Purge expired traces and fixtures. Returns counts removed. */
+function purgeExpired(now: number = Date.now()): { traces: number; fixtures: number } {
+  let traces = 0;
+  let fixtures = 0;
+  for (const [k, v] of traceStore) {
+    if (now - v.recordedAt > TRACE_RETENTION_MS) {
+      traceStore.delete(k);
+      traces++;
+    }
+  }
+  for (const [k, v] of fixtureStore) {
+    if (now - v.recordedAt > FIXTURE_RETENTION_MS) {
+      fixtureStore.delete(k);
+      fixtures++;
+    }
+  }
+  return { traces, fixtures };
+}
+
+/**
+ * Record a trace at the write boundary. Arguments are redacted here so
+ * secrets and payout identifiers can never reach the store.
+ */
+function recordTrace(
+  userId: string,
+  sessionId: string,
+  trace: ConversationTrace,
+  now: number = Date.now(),
+): void {
+  purgeExpired(now);
+  const safe: ConversationTrace = {
+    ...trace,
+    steps: trace.steps.map((s) => ({ ...s, args: redactArgs(s.args) })),
+  };
+  traceStore.set(traceKey(userId, sessionId, now), {
+    userId,
+    sessionId,
+    recordedAt: now,
+    trace: safe,
+  });
+}
+
+/** Record an evaluation fixture (synthetic, pinned). */
+function recordFixture(fixture: ConversationTrace, now: number = Date.now()): void {
+  purgeExpired(now);
+  const safe: ConversationTrace = {
+    ...fixture,
+    steps: fixture.steps.map((s) => ({ ...s, args: redactArgs(s.args) })),
+  };
+  fixtureStore.set(fixture.fixture, { fixture: fixture.fixture, recordedAt: now, trace: safe });
+}
+
+/**
+ * Delete traces for a user. Authorization: callers may only delete their own
+ * traces; a mismatched actor is rejected and nothing is removed.
+ */
+function deleteTracesByUser(
+  actorId: string,
+  userId: string,
+): { deleted: number; authorized: boolean } {
+  if (actorId !== userId) return { deleted: 0, authorized: false };
+  let deleted = 0;
+  for (const [k, v] of traceStore) {
+    if (v.userId === userId) {
+      traceStore.delete(k);
+      deleted++;
+    }
+  }
+  return { deleted, authorized: true };
+}
+
+/**
+ * Delete traces for a session. Authorization: the actor must own the session's
+ * traces. Returns `notFound` when no traces exist so callers can recover.
+ */
+function deleteTracesBySession(
+  actorId: string,
+  sessionId: string,
+): { deleted: number; authorized: boolean; notFound: boolean } {
+  const owned = [...traceStore.values()].filter((v) => v.sessionId === sessionId);
+  if (owned.length === 0) return { deleted: 0, authorized: true, notFound: true };
+  if (owned.some((v) => v.userId !== actorId)) {
+    return { deleted: 0, authorized: false, notFound: false };
+  }
+  let deleted = 0;
+  for (const [k, v] of traceStore) {
+    if (v.sessionId === sessionId) {
+      traceStore.delete(k);
+      deleted++;
+    }
+  }
+  return { deleted, authorized: true, notFound: false };
 }
 
 /** Tools that must never execute during replay. */

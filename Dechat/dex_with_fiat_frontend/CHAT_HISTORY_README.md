@@ -105,7 +105,11 @@ quote/provider timestamp was attached, and the coarse outcome (`cited`,
 `estimate`, `declined`). They never include the raw model output or the
 numeric value, consistent with the logging rules above.
 
-## Diagnostics
+- Normal path: trace written, redacted, and retrievable.
+- Redaction: secrets and payout identifiers never appear in stored traces.
+- Deletion by user and by session.
+- Authorization failure: cross-user deletion is rejected.
+- Recovery: deleting a non-existent user/session is an idempotent no-op.
 
 Evaluation reports pass/fail per category against the thresholds above. A
 regression is reported when any category falls below its threshold, and the
