@@ -33,6 +33,8 @@ export async function POST(request: NextRequest) {
   // 1. Enforce payout API security: Origin, Sec-Fetch-Site, CSRF, and explicit CORS
   const securityBlocked = enforcePayoutRouteSecurity(request);
   if (securityBlocked) return securityBlocked;
+  const apiVersionBlocked = enforcePayoutApiVersion(request);
+  if (apiVersionBlocked) return apiVersionBlocked;
 
   const ip = getClientIp(request);
   const correlationId = extractOrGenerateCorrelationId(request.headers);
@@ -180,15 +182,15 @@ export async function POST(request: NextRequest) {
 
     telemetry.finishSpan(span.spanId, { success: true });
 
-    const apiResponse = NextResponse.json({
-      success: true,
-      data: {
+    const apiResponse = payoutSuccessResponse(
+      {
         recipient_code: beneficiaryResult.recipientCode,
         name: beneficiaryResult.name,
         reused: beneficiaryResult.reused,
         recovered: beneficiaryResult.recovered,
       },
-    });
+      { correlationId },
+    );
 
     telemetry.setTraceHeaders(apiResponse.headers, traceContext);
     return apiResponse;

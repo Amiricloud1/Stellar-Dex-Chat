@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server';
 import { randomUUID } from 'crypto';
 
 export const API_VERSION = 'v1' as const;
+export const API_VERSION_HEADER = 'X-API-Version';
+export const SUPPORTED_API_VERSIONS = ['v1'] as const;
+export const PAYOUT_API_DEPRECATION_WINDOW_MONTHS = 6;
 
 export type PayoutErrorCategory =
   'validation' | 'authorization' | 'provider' | 'rate_limit' | 'internal';
@@ -226,7 +229,11 @@ export function validationError(options: {
   code?: PayoutErrorCode;
 }): NextResponse {
   const details: PayoutErrorDetail[] = (options.issues || []).map((issue) => ({
-    field: issue.path ? issue.path.join('.') : undefined,
+    field: issue.path
+      ? issue.path
+          .filter((part): part is string | number => typeof part !== 'symbol')
+          .join('.')
+      : undefined,
     message: issue.message,
     code: issue.code,
   }));

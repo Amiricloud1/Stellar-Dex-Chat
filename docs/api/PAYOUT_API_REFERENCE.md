@@ -4,6 +4,10 @@
 - **Semantic Versioning**: All route contracts adhere to `v1`, `v2` URL prefixes.
 - **Breaking Changes**: Changing field types, removing fields, or adding required request headers requires a major version bump.
 - **Deprecation**: Deprecated routes remain functional for a minimum of 6 months after formal notice.
+- **Transport version**: Clients may set `X-API-Version: v1`. The header is optional for backward compatibility; missing headers select v1.
+- **Incompatible versions**: Unsupported versions return HTTP 406 with `UNSUPPORTED_API_VERSION` in `body.error.code`.
+- **Current success envelope**: `{ "version": "v1", "success": true, "data": ... }`. Legacy `success` and `data` fields remain present.
+- **Deprecated schema removal**: No v1 field may be removed until the deprecation notice has remained active for at least 6 months and compatibility tests have passed.
 
 ## Current application endpoints
 

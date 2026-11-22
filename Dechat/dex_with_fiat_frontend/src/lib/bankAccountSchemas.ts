@@ -152,7 +152,7 @@ export const beneficiaryTypeSchema = z.preprocess(
  */
 export const beneficiaryCurrencySchema = z.preprocess(
   (val) => (typeof val === 'string' ? val.trim().toUpperCase() : val),
-  z.enum(['NGN', 'GHS', 'KES', 'ZAR', 'USD']),
+  z.enum(['NGN']),
 );
 
 /**

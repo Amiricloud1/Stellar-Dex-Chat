@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import crypto from 'crypto';
 import * as Sentry from '@sentry/nextjs';
 import { getPayoutProvider } from '@/lib/payout/providers/registry';
 import { sanitizeProviderError } from '@/lib/payout/timeoutBudget';
@@ -65,6 +64,15 @@ export async function OPTIONS(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const securityBlocked = enforcePayoutRouteSecurity(request);
   if (securityBlocked) return securityBlocked;
+  const apiVersionBlocked = enforcePayoutApiVersion(request);
+  if (apiVersionBlocked) return apiVersionBlocked;
+  if (!request.headers.get('X-Idempotency-Key')) {
+    return validationError({
+      message: 'X-Idempotency-Key header is required',
+      correlationId: extractOrGenerateCorrelationId(request.headers),
+      code: 'VALIDATION_ERROR',
+    });
+  }
 
   const correlationId = extractOrGenerateCorrelationId(request.headers);
   const headerIdempotencyKey = request.headers.get('X-Idempotency-Key');
@@ -353,10 +361,7 @@ export async function POST(request: NextRequest) {
         requestFingerprint,
       });
 
-      return NextResponse.json({
-        success: true,
-        data,
-      });
+      return payoutSuccessResponse(data, { correlationId });
     } catch (providerError: unknown) {
       const now = Date.now();
       const errorMessage =
@@ -399,13 +404,20 @@ export async function POST(request: NextRequest) {
 
       return NextResponse.json(
         {
-          success: true,
-          status: 'queued_for_retry',
           reference: idempotencyKey,
           jobId: retryJob.id,
           message: 'Transfer queued for retry due to provider uncertainty',
         },
-        { status: 202 },
+        {
+          status: 202,
+          correlationId,
+          extra: {
+            status: 'queued_for_retry',
+            reference: idempotencyKey,
+            jobId: retryJob.id,
+            message: 'Transfer queued for retry due to provider failure',
+          },
+        },
       );
     }
   } catch (error: unknown) {

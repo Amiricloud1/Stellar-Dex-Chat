@@ -32,6 +32,8 @@ export async function POST(request: NextRequest) {
   // Enforce payout API security
   const securityBlocked = enforcePayoutRouteSecurity(request);
   if (securityBlocked) return securityBlocked;
+  const apiVersionBlocked = enforcePayoutApiVersion(request);
+  if (apiVersionBlocked) return apiVersionBlocked;
 
   const ip = getClientIp(request);
   const correlationId = extractOrGenerateCorrelationId(request.headers);

@@ -42,17 +42,32 @@ export const MAX_TRANSFER_AMOUNT_NGN = 10_000_000;
 
 export const initiateTransferSchema = z
   .object({
+    schemaVersion: z.literal('v1').optional(),
+    apiVersion: z.literal('v1').optional(),
     source: z.string().min(1, 'Source is required'),
     reason: z.string().optional(),
     amount: z
-      .number()
-      .positive('Amount must be positive')
-      .max(MAX_TRANSFER_AMOUNT_NGN, 'Amount exceeds the transfer limit')
-      .refine(
-        (amount) =>
-          Math.abs(amount * 100 - Math.round(amount * 100)) <=
-          Number.EPSILON * Math.max(1, Math.abs(amount * 100)) * 4,
-        'Amount must have at most 2 decimal places',
+      .union([
+        z.number(),
+        z
+          .string()
+          .regex(
+            /^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/,
+            'Amount must be a decimal with at most 2 places',
+          ),
+      ])
+      .transform((value) => (typeof value === 'string' ? Number(value) : value))
+      .pipe(
+        z
+          .number()
+          .positive('Amount must be positive')
+          .max(MAX_TRANSFER_AMOUNT_NGN, 'Amount exceeds the transfer limit')
+          .refine(
+            (amount) =>
+              Math.abs(amount * 100 - Math.round(amount * 100)) <=
+              Number.EPSILON * Math.max(1, Math.abs(amount * 100)) * 4,
+            'Amount must have at most 2 decimal places',
+          ),
       ),
     recipient: z.string().min(1, 'Recipient is required'),
     reference: z.string().optional(),

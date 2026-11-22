@@ -20,13 +20,16 @@ import type {
   CreatedRecipient,
   InitiatedTransfer,
   InitiateTransferInput,
+  InitiateTransferResult,
   NormalizedPayoutStatus,
   PayoutProvider,
   TransferStatus,
   TransferStatusInput,
-  VerifiedAccount,
+  TransferStatusResult,
   VerifyAccountInput,
+  VerifyAccountResult,
 } from './types';
+import { PayoutProviderError } from './types';
 
 const DEFAULT_IDEMPOTENCY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const PAYSTACK_IDEMPOTENCY_WINDOW_MS = Number(
@@ -61,6 +64,7 @@ function normalizePaystackStatus(status?: string): NormalizedPayoutStatus {
     case 'reversed':
       return 'reversed';
     case 'cancelled':
+    case 'canceled':
       return 'cancelled';
     default:
       return 'pending';
