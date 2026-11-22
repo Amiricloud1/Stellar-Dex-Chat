@@ -68,5 +68,5 @@ MIT
 <!-- handsoff-issue-13 -->
 - #13: feat(contract): reserve withdrawal amounts when requests are queued
 
-<!-- handsoff-issue-218 -->
-- #218: Support cancellation and timeout propagation through every model adapter
+<!-- handsoff-issue-205 -->
+- #205: Make transaction status subscriptions reconnect without gaps

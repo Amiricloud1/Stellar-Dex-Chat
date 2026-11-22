@@ -37,6 +37,49 @@ const STATUS_LABEL: Record<FactStatus, string> = {
 };
 
 /**
+ * Validated transaction intent proposal.
+ *
+ * Produced by the intent validator (never by conversational prose). The
+ * confirmation summary is rendered exclusively from these typed fields so the
+ * model cannot smuggle a different asset, amount, recipient, or network into
+ * the wallet action.
+ */
+interface IntentProposal {
+  /** True only when the proposal passed server-side validation. */
+  validated: boolean;
+  asset: string;
+  amount: string;
+  recipient: string;
+  network: string;
+}
+
+/** Fields the user must explicitly acknowledge before a wallet action. */
+type IntentField = 'asset' | 'amount' | 'recipient' | 'network';
+const INTENT_FIELDS: IntentField[] = ['asset', 'amount', 'recipient', 'network'];
+
+const INTENT_FIELD_LABEL: Record<IntentField, string> = {
+  asset: 'Asset',
+  amount: 'Amount',
+  recipient: 'Recipient',
+  network: 'Network',
+};
+
+/**
+ * Validate a raw intent proposal. Returns null when any required field is
+ * missing/blank or the proposal was not validated upstream — in that case no
+ * confirmation summary is rendered and no wallet action may be dispatched.
+ */
+function validateIntentProposal(raw: Partial<IntentProposal> | null | undefined): IntentProposal | null {
+  if (!raw || raw.validated !== true) return null;
+  const asset = typeof raw.asset === 'string' ? raw.asset.trim() : '';
+  const amount = typeof raw.amount === 'string' ? raw.amount.trim() : '';
+  const recipient = typeof raw.recipient === 'string' ? raw.recipient.trim() : '';
+  const network = typeof raw.network === 'string' ? raw.network.trim() : '';
+  if (!asset || !amount || !recipient || !network) return null;
+  return { validated: true, asset, amount, recipient, network };
+}
+
+/**
  * Bounded latency budgets for model requests.
  *
  * `requestMs` bounds a single model round-trip; `totalMs` bounds the whole
@@ -383,4 +426,82 @@ function replayTrace(
     }
   }
   return divergences;
+}
+
+/**
+ * Explicit transaction intent confirmation for AI handoff.
+ *
+ * Renders a typed summary sourced from the validated intent proposal and
+ * requires the user to acknowledge asset, amount, recipient, and network
+ * before any wallet action is dispatched. If the proposal is missing or
+ * unvalidated, no summary is shown and the action stays disabled.
+ */
+function IntentConfirmation({
+  proposal,
+  onConfirm,
+}: {
+  proposal: IntentProposal | null;
+  onConfirm: (proposal: IntentProposal) => void;
+}) {
+  const [acknowledged, setAcknowledged] = useState<Record<IntentField, boolean>>({
+    asset: false,
+    amount: false,
+    recipient: false,
+    network: false,
+  });
+
+  // Reset acknowledgements whenever the proposal identity changes so a stale
+  // acknowledgement can never authorize a different intent.
+  const proposalKey = proposal
+    ? `${proposal.asset}|${proposal.amount}|${proposal.recipient}|${proposal.network}`
+    : '';
+  useEffect(() => {
+    setAcknowledged({ asset: false, amount: false, recipient: false, network: false });
+  }, [proposalKey]);
+
+  if (!proposal) {
+    return (
+      <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+        No validated transaction intent is available. Confirm the asset, amount,
+        recipient, and network before any wallet action.
+      </div>
+    );
+  }
+
+  const allAcknowledged = INTENT_FIELDS.every((f) => acknowledged[f]);
+
+  return (
+    <div className="rounded border border-gray-300 p-3 text-sm">
+      <h3 className="mb-2 font-semibold">Confirm transaction intent</h3>
+      <ul className="mb-3 space-y-1">
+        {INTENT_FIELDS.map((field) => (
+          <li key={field} className="flex items-center gap-2">
+            <input
+              id={`intent-ack-${field}`}
+              type="checkbox"
+              checked={acknowledged[field]}
+              onChange={(e) =>
+                setAcknowledged((prev) => ({ ...prev, [field]: e.target.checked }))
+              }
+            />
+            <label htmlFor={`intent-ack-${field}`}>
+              <span className="font-medium">{INTENT_FIELD_LABEL[field]}:</span>{' '}
+              <span className="font-mono">{proposal[field]}</span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      <button
+        type="button"
+        disabled={!allAcknowledged}
+        onClick={() => {
+          if (!allAcknowledged) return;
+          onConfirm(proposal);
+        }}
+        className="rounded bg-blue-600 px-3 py-1 text-white disabled:opacity-50"
+      >
+        Confirm and continue
+      </button>
+    </div>
+  );
 }
