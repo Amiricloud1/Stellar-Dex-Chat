@@ -382,6 +382,21 @@ export default function StellarFiatModal({
     if (!pending) {
       return;
     }
+    // Account/network isolation: ignore pending records from other contexts.
+    if (
+      connection.publicKey &&
+      pending.account &&
+      pending.account !== connection.publicKey
+    ) {
+      return;
+    }
+    if (
+      connection.network &&
+      pending.network &&
+      pending.network !== connection.network
+    ) {
+      return;
+    }
 
     setPendingRecord(pending);
     setAmount(pending.amount);
@@ -399,7 +414,7 @@ export default function StellarFiatModal({
 
       if (outcome === 'confirmed') {
         setStatus('success');
-        clearPendingRecoveryRecord();
+        clearScopedPending();
         await refreshXlmBalance();
         addNotification(
           'tx_confirm',
@@ -408,7 +423,7 @@ export default function StellarFiatModal({
       } else if (outcome === 'failed') {
         setStatus('error');
         setErrorMsg('Recovered transaction failed on-chain');
-        clearPendingRecoveryRecord();
+        clearScopedPending();
       } else if (outcome === 'unknown') {
         setStatus('error');
         setErrorMsg(
@@ -421,7 +436,7 @@ export default function StellarFiatModal({
           if (cancelled) return;
           setStatus('success');
           setTxHash(finalHash);
-          clearPendingRecoveryRecord();
+          clearScopedPending();
           await refreshXlmBalance();
           addNotification(
             'tx_confirm',
@@ -431,7 +446,7 @@ export default function StellarFiatModal({
           if (cancelled) return;
           setStatus('error');
           setErrorMsg('Recovered transaction failed or timed out on-chain');
-          clearPendingRecoveryRecord();
+          clearScopedPending();
         }
       }
     })();
@@ -701,9 +716,7 @@ export default function StellarFiatModal({
   };
 
   const handleConfirmReplacement = () => {
-    const pendingKey = getPendingTxKey(connection.publicKey, connection.network);
-    localStorage.removeItem(pendingKey);
-    localStorage.removeItem('stellar_pending_tx');
+    clearScopedPending();
     setPendingRecord(null);
     setConfirmReplacementChecked(false);
     setStatusLookupOutcome(null);
@@ -725,7 +738,19 @@ export default function StellarFiatModal({
       : null;
   };
 
-  const handleAction = async () => {
+  const getScopedPendingKey = useCallback(() => {
+    if (!connection.publicKey) return null;
+    const net = connection.network || 'TESTNET';
+    return `stellar_pending_tx_${net}_${connection.publicKey}`;
+  }, [connection.publicKey, connection.network]);
+
+  const clearScopedPending = useCallback(() => {
+    const scoped = getScopedPendingKey();
+    if (scoped) localStorage.removeItem(scoped);
+    localStorage.removeItem('stellar_pending_tx');
+  }, [getScopedPendingKey]);
+
+  const handleAction = async (bypassReconfirmation = false) => {
     if (!connection.isConnected || sessionExpired) {
       const rawMsg = sessionExpired
         ? 'Wallet session has expired. Please reconnect to continue.'
@@ -863,7 +888,7 @@ export default function StellarFiatModal({
     }
 
     // Protect transaction forms from stale quotes and balances (#62)
-    if (!hasConfirmedUpdatedValues && !shouldBypass) {
+    if (!hasConfirmedUpdatedValues && !bypassReconfirmation) {
       const revalidation = await protectionModule.revalidateFormInputs({
         quoteSnapshot,
         balanceSnapshot,
@@ -912,10 +937,10 @@ export default function StellarFiatModal({
           `[StellarFiatModal] Initiating ${isAdminMode ? 'withdraw' : 'deposit'} with idempotencyKey: ${generatedIdempotencyKey}`,
         );
 
-        const pendingKey = getPendingTxKey(connection.publicKey, connection.network);
         let capturedHash: string | null = null;
         const onHashKnown = (hash: string) => {
-          savePendingRecoveryRecord({
+          capturedHash = hash;
+          const record = {
             hash,
             operation: isAdminMode ? 'withdraw' : 'deposit',
             amount,
@@ -924,9 +949,14 @@ export default function StellarFiatModal({
             network: connection.network || 'TESTNET',
             account: connection.publicKey,
             timestamp: Date.now(),
-            stage: 'pending_confirmation',
+            stage: 'pending_confirmation' as const,
             idempotencyKey: generatedIdempotencyKey,
-          });
+          };
+          savePendingRecoveryRecord(record);
+          const scoped = getScopedPendingKey();
+          if (scoped) {
+            try { localStorage.setItem(scoped, JSON.stringify(record)); } catch {}
+          }
         };
 
         const signTxWithContext = (xdr: string) =>
@@ -996,12 +1026,11 @@ export default function StellarFiatModal({
           if (errMsg.includes('WALLET_CONTEXT_CHANGED')) {
             setStatus('context_changed');
             setRecoverableContextMessage(
-              'Wallet account or network changed during transaction signing. Transaction context has been invalidated. Please confirm to rebuild.',
+              'Wallet account or network changed during transaction. No write was submitted for the new context. Please confirm to rebuild.',
             );
             setAccessibleError(null);
             if (!capturedHash) {
-              localStorage.removeItem(pendingKey);
-              localStorage.removeItem('stellar_pending_tx');
+              clearScopedPending();
               setPendingRecord(null);
             }
             return;
@@ -1024,7 +1053,7 @@ export default function StellarFiatModal({
           setErrorMsg(errMsg || 'Transaction failed');
           setAccessibleError(classifyError(err, { safeValues: { amount, note: note.trim() } }));
           setStatus('error');
-          clearPendingRecoveryRecord();
+          clearScopedPending();
         }
       },
       `stellar_${isAdminMode ? 'withdraw' : 'deposit'}`,
